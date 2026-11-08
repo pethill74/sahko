@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F3F6F6">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Sähkö</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F3F6F6; --ink:#1C2B33; --muted:#5E6F78; --line:#CBD5D8;
+  --low:#2E7D6B; --mid:#E9E4D0; --high:#B23A48; --heat:#1C2B33; --ev:#2E7D6B;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#121B20; --ink:#E4ECEE; --muted:#8FA1A9; --line:#2C3A41;
+    --low:#4FB39B; --mid:#3A4247; --high:#D9606E; --heat:#E4ECEE; --ev:#4FB39B; color-scheme:dark;}
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"Schibsted Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:16px;line-height:1.45;font-variant-numeric:tabular-nums}
+main{max-width:640px;margin:0 auto;padding:20px 18px 48px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+h1{font-size:2rem;font-weight:700;margin:0;letter-spacing:-.02em}
+h2{font-size:1.15rem;font-weight:700;margin:0 0 6px}
+.muted{color:var(--muted);font-size:.875rem}
+button{font:inherit;color:var(--ink);background:none;border:1px solid var(--line);
+  border-radius:999px;padding:6px 14px;cursor:pointer}
+button:focus-visible,input:focus-visible,summary:focus-visible,.row:focus-visible{outline:2px solid var(--low);outline-offset:2px}
+section{padding:22px 0;border-top:1px solid var(--line)}
+section:first-of-type{border-top:0}
+/* viikon lämpökartta */
+.grid{display:flex;flex-direction:column;gap:3px;margin-top:10px}
+.row{display:grid;grid-template-columns:64px 1fr;align-items:center;gap:8px;
+  cursor:pointer;border-radius:4px;padding:2px 0}
+.row .lbl{font-size:.8rem;line-height:1.1}
+.row .lbl small{display:block;color:var(--muted);font-size:.7rem}
+.cells{display:grid;grid-template-columns:repeat(24,1fr);gap:1px;height:26px}
+.cells span{border-radius:2px}
+.cells span.fc{opacity:.78}
+.row.sel .lbl{font-weight:700}
+.row.sel .cells{outline:2px solid var(--ink);outline-offset:2px;border-radius:2px}
+.axis{display:grid;grid-template-columns:64px 1fr;gap:8px;margin-top:4px}
+.axis div{display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted)}
+.legend{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:.75rem;color:var(--muted)}
+.legend i{display:block;width:120px;height:6px;border-radius:3px;
+  background:linear-gradient(90deg,var(--low),var(--mid),var(--high))}
+/* päivä */
+.daystats{display:flex;gap:18px;flex-wrap:wrap;margin:2px 0 12px}
+.daystats b{font-size:1.1rem}
+svg{display:block;width:100%;height:auto}
+.big{font-size:1.6rem;font-weight:700;letter-spacing:-.01em;line-height:1.25}
+.periods{margin:6px 0 8px;padding:0;list-style:none}
+.periods li{font-size:1.6rem;font-weight:700;line-height:1.3}
+p{margin:6px 0}
+/* asetukset */
+details summary{cursor:pointer;font-weight:700;font-size:1.15rem}
+fieldset{border:0;border-top:1px solid var(--line);margin:16px 0 0;padding:12px 0 0}
+legend{font-weight:700;padding:0;margin-bottom:6px}
+label{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;font-size:.95rem}
+input[type=number],input[type=time]{width:96px;font:inherit;color:var(--ink);background:transparent;
+  border:0;border-bottom:1px solid var(--line);padding:4px 2px;text-align:right}
+input[type=checkbox]{width:20px;height:20px;accent-color:var(--low)}
+.err{color:var(--high)}
+@media (prefers-reduced-motion:no-preference){.cells span{transition:opacity .2s}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Sähkö</h1>
+  <button id="refresh" type="button">Päivitä</button>
+</header>
+<p class="muted" id="status">Haetaan hintoja…</p>
+
+<section aria-labelledby="h-week">
+  <h2 id="h-week">Viikon hinnat</h2>
+  <p class="muted">Napauta päivää nähdäksesi sen suositukset.</p>
+  <div class="grid" id="grid"></div>
+  <div class="axis"><span></span><div><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div></div>
+  <div class="legend"><span>halpa</span><i></i><span>kallis</span><span>· haalea = ennuste</span></div>
+</section>
+
+<section aria-labelledby="h-day">
+  <h2 id="h-day">Päivä</h2>
+  <div class="daystats" id="daystats"></div>
+  <div id="chart"></div>
+</section>
+
+<section aria-labelledby="h-heat">
+  <h2 id="h-heat">Lattialämmitys</h2>
+  <div id="heat"></div>
+</section>
+
+<section aria-labelledby="h-ev">
+  <h2 id="h-ev">Sähköauto</h2>
+  <div id="ev"></div>
+</section>
+
+<section>
+<details>
+  <summary>Asetukset</summary>
+  <form id="settings" onsubmit="return false">
+    <fieldset><legend>Hinta</legend>
+      <label>Marginaali ja siirto, c/kWh <input type="number" step="0.01" name="margin"></label>
+    </fieldset>
+    <fieldset><legend>Lattialämmitys</legend>
+      <label>Lämmöntarve alkaa klo <input type="time" step="600" name="needStart"></label>
+      <label>Lämmöntarve päättyy klo <input type="time" step="600" name="needEnd"></label>
+      <label>Lämpimänä × lämmitysaika <input type="number" step="0.1" min="1" name="ratio"></label>
+      <label>Kerroin pätee enintään, h <input type="number" step="0.5" min="0.5" name="maxCharge"></label>
+      <label>Lyhin lämmitysjakso, min <input type="number" step="10" min="10" name="minRun"></label>
+      <label>Halvan sähkön raja, c/kWh <input type="number" step="0.5" name="cheap"></label>
+      <label>Kalliin sähkön raja, c/kWh <input type="number" step="0.5" name="dear"></label>
+      <label>Lämpötila, jos ennustetta ei saada, °C <input type="number" step="1" name="fallbackTemp"></label>
+      <label>Ei lämmitystä, kun keskilämpö yli °C <input type="number" step="1" name="seasonOff"></label>
+    </fieldset>
+    <fieldset><legend>Termostaatti</legend>
+      <p class="muted">Termostaatin peruslämpötila (16 °C) pysyy ennallaan. Sovellus kirjoittaa kullekin jaksolle korotuksen sääntöjen mukaan.</p>
+      <label>Näytä kaikki Bluetooth-laitteet <input type="checkbox" name="btAll"></label>
+      <label>Unohda termostaatin paritus <button type="button" id="btforget">Unohda</button></label>
+    </fieldset>
+    <fieldset><legend>Sähköauto</legend>
+      <label>Latausteho, kW <input type="number" step="0.1" name="evKw"></label>
+      <label>Ladattava energia, kWh <input type="number" step="1" name="evKwh"></label>
+      <label>Auto kotona alkaen klo <input type="number" step="1" min="0" max="23" name="evStart"></label>
+      <label>Oltava valmis klo <input type="number" step="1" min="0" max="23" name="evEnd"></label>
+      <label>Lataus yhtenä jaksona <input type="checkbox" name="evConsecutive"></label>
+    </fieldset>
+    <fieldset><legend>Sääennusteen sijainti</legend>
+      <label>Leveysaste <input type="number" step="0.01" name="lat"></label>
+      <label>Pituusaste <input type="number" step="0.01" name="lon"></label>
+    </fieldset>
+    <p class="muted">Hintaennuste: Nordpool Predict FI (sahkovatkain.web.app). Toteutuneet hinnat: porssisahko.net. Sää: Open-Meteo.</p>
+  </form>
+</details>
+</section>
+</main>
+
+<script>
+const HOUR = 3600000;
+const DEFAULTS = {margin:0, needStart:5.5, needEnd:22.5, ratio:2.5, maxCharge:3.5, minRun:10, cheap:4, dear:10, fallbackTemp:0,
+  evKw:11, evKwh:30, evStart:18, evEnd:7, evConsecutive:true, lat:60.27, lon:25.10,
+  seasonOff:12, btAll:false};
+const URL_PRED = "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi/main/deploy/prediction.json";
+const URL_REAL = "https://api.porssisahko.net/v2/latest-prices.json";
+
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+let S = Object.assign({}, DEFAULTS, store.get("sahko-settings", {}));
+if(S.minRun === 60 && !S.minRunSet){ S.minRun = 10; }   // aiemman oletuksen korjaus
+if(S.needStart === 6 && S.needEnd === 23){ S.needStart = 5.5; S.needEnd = 22.5; }
+let prices = new Map();   // varttitunnin alku (ms) -> {p, confirmed}
+const Q = 900000;
+const floorQ = t => Math.floor(t/Q)*Q;
+let temps = {};           // "YYYY-MM-DD" -> keskilämpötila
+let days = [];
+let selected = 1;
+
+const $ = id => document.getElementById(id);
+const fmt = (n, d=1) => n.toLocaleString("fi-FI",{minimumFractionDigits:d, maximumFractionDigits:d});
+const wd = ["su","ma","ti","ke","to","pe","la"];
+const dayName = d => `${wd[d.getDay()]} ${d.getDate()}.${d.getMonth()+1}.`;
+const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const hh = h => String(h % 24).padStart(2,"0");
+const floorHour = t => { const d = new Date(t); d.setMinutes(0,0,0); return d.getTime(); };
+
+async function getJSON(url){
+  const r = await fetch(url, {cache:"no-store"});
+  if(!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+async function load(){
+  $("status").textContent = "Haetaan hintoja…";
+  const map = new Map();
+  let note = [];
+  try{
+    const pred = await getJSON(URL_PRED);
+    for(const [t,p] of pred){ const h = floorHour(t); for(let k=0;k<4;k++) map.set(h+k*Q, {p, confirmed:false}); }
+  }catch(e){ note.push("hintaennustetta ei saatu"); }
+  try{
+    const real = await getJSON(URL_REAL);
+    // pörssihinta on varttitunneittain; tuntihinnat jaetaan neljään varttiin
+    for(const x of real.prices || []){
+      const a = floorQ(new Date(x.startDate).getTime());
+      const b = x.endDate ? new Date(x.endDate).getTime() : a+Q;
+      for(let t=a; t<b; t+=Q) map.set(t, {p:x.price, confirmed:true});
+    }
+  }catch(e){ note.push("vahvistettuja hintoja ei saatu"); }
+  try{
+    const w = await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${S.lat}&longitude=${S.lon}&daily=temperature_2m_mean&timezone=Europe%2FHelsinki&forecast_days=9`);
+    temps = {};
+    w.daily.time.forEach((d,i)=> temps[d] = w.daily.temperature_2m_mean[i]);
+  }catch(e){ note.push("sääennustetta ei saatu"); }
+
+  if(map.size){
+    prices = map;
+    store.set("sahko-cache2", {prices:[...map], temps, at:Date.now()});
+    const t = new Date();
+    $("status").textContent = `Päivitetty ${hh(t.getHours())}.${String(t.getMinutes()).padStart(2,"0")}` + (note.length ? ` (${note.join(", ")})` : "");
+  }else{
+    const c = store.get("sahko-cache2", null);
+    if(c){
+      prices = new Map(c.prices); temps = c.temps || {};
+      const t = new Date(c.at);
+      $("status").innerHTML = `<span class="err">Ei yhteyttä.</span> Näytetään ${dayName(t)} klo ${hh(t.getHours())} haetut tiedot.`;
+    }else{
+      $("status").innerHTML = `<span class="err">Hintoja ei saatu.</span> Tarkista verkkoyhteys ja paina Päivitä.`;
+    }
+  }
+  buildDays(); render();
+}
+
+function hourAt(t){
+  let s = 0, n = 0, conf = true;
+  for(let k=0;k<4;k++){ const v = prices.get(t+k*Q); if(!v) return null; s += v.p; n++; conf = conf && v.confirmed; }
+  return {p:s/n, confirmed:conf};
+}
+
+function buildDays(){
+  days = [];
+  const d0 = new Date(); d0.setHours(0,0,0,0);
+  for(let i=0;i<9;i++){
+    const start = new Date(d0); start.setDate(d0.getDate()+i);
+    const end = new Date(start); end.setDate(start.getDate()+1);
+    const hours = Array(24).fill(null), q = Array(96).fill(null);
+    for(let t=start.getTime(); t<end.getTime(); t+=Q){
+      const v = prices.get(t); if(!v) continue;
+      const dt = new Date(t); q[dt.getHours()*4 + Math.floor(dt.getMinutes()/15)] = v.p;
+    }
+    for(let h=0;h<24;h++){
+      const t = new Date(start); t.setHours(h,0,0,0);
+      const v = hourAt(t.getTime());
+      if(v) hours[h] = {t:t.getTime(), p:v.p, confirmed:v.confirmed};
+    }
+    if(hours.some(Boolean)) days.push({start, hours, q, i});
+  }
+  if(selected >= days.length) selected = Math.max(0, days.length-1);
+}
+
+function color(p){
+  // 0 c → halpa, 8 c → keskitaso, 20 c+ → kallis
+  const cs = getComputedStyle(document.documentElement);
+  const lo = cs.getPropertyValue("--low").trim(), mid = cs.getPropertyValue("--mid").trim(), hi = cs.getPropertyValue("--high").trim();
+  if(p <= 8) return mix(lo, mid, Math.max(0,p)/8);
+  return mix(mid, hi, Math.min(1,(p-8)/12));
+}
+function mix(a,b,t){
+  const pa = [1,3,5].map(i=>parseInt(a.slice(i,i+2),16)), pb = [1,3,5].map(i=>parseInt(b.slice(i,i+2),16));
+  return `rgb(${pa.map((v,i)=>Math.round(v+(pb[i]-v)*t)).join(",")})`;
+}
+const label = i => i===0 ? "Tänään" : i===1 ? "Huomenna" : null;
+
+function render(){
+  // viikon kartta
+  const g = $("grid"); g.innerHTML = "";
+  days.forEach((d,idx)=>{
+    const row = document.createElement("div");
+    row.className = "row" + (idx===selected ? " sel" : "");
+    row.tabIndex = 0; row.setAttribute("role","button");
+    const allConf = d.hours.every(h=>!h || h.confirmed);
+    row.innerHTML = `<div class="lbl">${dayName(d.start)}<small>${label(d.i) || (allConf ? "" : "ennuste")}</small></div>
+      <div class="cells">${d.hours.map(h => h ? `<span class="${h.confirmed?"":"fc"}" style="background:${color(h.p)}" title="klo ${hh(new Date(h.t).getHours())}: ${fmt(h.p)} c"></span>` : `<span></span>`).join("")}</div>`;
+    const pick = ()=>{ selected = idx; render(); };
+    row.onclick = pick; row.onkeydown = e => { if(e.key==="Enter"||e.key===" "){ e.preventDefault(); pick(); } };
+    g.appendChild(row);
+  });
+  const d = days[selected];
+  if(!d){ ["daystats","chart","heat","ev"].forEach(id=>$(id).innerHTML=""); return; }
+
+  // päivän tiedot
+  $("h-day").textContent = (label(d.i) ? label(d.i)+", " : "") + dayName(d.start);
+  const ps = d.hours.filter(Boolean).map(h=>h.p+S.margin);
+  const avg = ps.reduce((a,b)=>a+b,0)/ps.length;
+  const t = temps[iso(d.start)];
+  $("daystats").innerHTML = `<span>keskihinta <b>${fmt(avg)}</b> c/kWh</span><span>halvin <b>${fmt(Math.min(...ps))}</b></span><span>kallein <b>${fmt(Math.max(...ps))}</b></span>`
+    + (t!=null ? `<span>ulkona keskimäärin <b>${fmt(t,0)}</b> °C</span>` : "");
+
+  const heat = heating(d);
+  const ev = evPlan(d.start);
+  drawChart(d, heat && heat.slots ? heat.slots : new Set(), ev ? ev.hours : new Set());
+  renderHeat(d, heat, t);
+  renderEv(ev);
+}
+
+/* Lattialämmitys. Termostaatin perusasetus on 16 °C ja jaksot ovat korotuksia siihen.
+   Suunnitellaan 10 minuutin jaksoissa (Enston tarkkuus); kunkin 10 min jakson hinta on
+   siihen osuvien varttihintojen keskiarvo. Lämmöntarve on klo needStart–needEnd.
+   L:n pituinen lämmitys pitää lämpimänä vielä (ratio−1)·min(L, maxCharge) lämmityksen
+   päättymisen jälkeen: 3 h → 7,5 h yhteensä, 3,5 h tai pidempi → varaus enintään 5 h 15 min.
+   Säännöt (hinnat ilman marginaalia):
+   A  hinta alle cheap koko tarveajan          → yksi jakso koko tarveajalle, +5 °C
+   B  hinta alle cheap ainakin osan päivää      → varauslämmitys: +6 (yli 0 °C), +7 (0…−10 °C), +8 (alle −10 °C)
+   C  hinta yli cheap, mutta osin alle dear      → varauslämmitys kuten B, yksi aste vähemmän
+   D  hinta koko päivän yli dear                → halvimmat neljä tuntia klo 02–22, +5 °C
+   Varauslämmityksessä valitaan halvimmat jaksot (enintään 6), joiden varaus kattaa tarveajan aukottomasti. */
+const SLOTS = 144;
+const tm = sl => `${hh(Math.floor(sl/6))}.${String((sl%6)*10).padStart(2,"0")}`;
+
+function slotPrices(d){
+  if(d.q.some(v=>v==null)) return null;
+  return Array.from({length:SLOTS}, (_,j)=> (d.q[Math.floor(2*j/3)] + d.q[Math.floor((2*j+1)/3)]) / 2);
+}
+
+function heating(d){
+  const p = slotPrices(d);
+  if(!p) return null;
+  const temp = temps[iso(d.start)] ?? S.fallbackTemp;
+  if(temp > S.seasonOff) return {off:true, temp};
+  const ns = Math.round(S.needStart*6), ne = Math.round(S.needEnd*6);
+  let rule, off, blocks;
+  if(p.slice(ns,ne).every(v=>v < S.cheap)){
+    rule = "A"; off = 5; blocks = [[ns,ne]];
+  }else if(p.every(v=>v >= S.dear)){
+    rule = "D"; off = 5; blocks = cheapestRuns(p, 12, 132, 24, 6);
+  }else{
+    const anyCheap = p.some(v=>v < S.cheap);
+    rule = anyCheap ? "B" : "C";
+    off = (temp > 0 ? 6 : temp >= -10 ? 7 : 8) - (anyCheap ? 0 : 1);
+    blocks = storagePlan(p, ns, ne, 6);
+  }
+  blocks = blocks.map(([a,b])=>[a,b,off]);
+  const slots = new Set(); let sum = 0;
+  for(const [a,b] of blocks) for(let j=a;j<b;j++){ slots.add(j); sum += p[j]; }
+  return {rule, lift:off, temp, blocks, slots, mins:slots.size*10, avgPrice: sum/slots.size + S.margin};
+}
+
+/* Varauslämmitys: käydään 10 min jaksot läpi. Tila on (käytetyt jaksot k, joko
+   "pois" + kuinka monta jaksoa varaus vielä kantaa, tai "päällä" + lämmityksen pituus
+   katkaistuna maxChargeen). Tarveajalla lämmön on oltava päällä tai varauksen voimassa.
+   Pienin kustannus löytyy tarkasti, ja jaksoja on enintään K. */
+function storagePlan(p, ns, ne, K){
+  const cap = Math.round(S.maxCharge*6), extra = S.ratio - 1;
+  const minL = Math.max(1, Math.min(cap, Math.round(S.minRun/10)));
+  const maxCov = Math.floor(extra*cap) + 1;
+  const INF = 1e12, eps = 1e-3;
+  const OFF = (k,c)=>k*(maxCov+1)+c, ON = (k,L)=>(K+1)*(maxCov+1) + k*(cap+1)+L;
+  const NS = (K+1)*(maxCov+1) + (K+1)*(cap+1);
+  let f = new Float64Array(NS).fill(INF); f[OFF(0,0)] = 0;
+  const back = [];
+  for(let i=0;i<ne;i++){
+    const g = new Float64Array(NS).fill(INF), bk = new Int32Array(NS).fill(-1), heat = new Uint8Array(NS);
+    const need = i >= ns;
+    const put = (st, v, from, h) => { if(v < g[st]){ g[st] = v; bk[st] = from; heat[st] = h; } };
+    for(let k=0;k<=K;k++){
+      for(let c=0;c<=maxCov;c++){                      // pois, varausta jäljellä c jaksoa
+        const v = f[OFF(k,c)]; if(v>=INF) continue;
+        if(!need || c>0) put(OFF(k, Math.max(0,c-1)), v, OFF(k,c), 0);
+        if(k<K) put(ON(k+1,1), v + p[i] + eps, OFF(k,c), 1);
+      }
+      for(let L=1;L<=cap;L++){                         // päällä, pituus L (katkaistu)
+        const v = f[ON(k,L)]; if(v>=INF) continue;
+        put(ON(k, Math.min(cap,L+1)), v + p[i] + eps, ON(k,L), 1);
+        const c = Math.floor(extra*L + 1e-9);           // lämmitys päättyy: varaus kantaa c jaksoa
+        if(L >= minL && (!need || c>0)) put(OFF(k, Math.max(0,c-1)), v, ON(k,L), 0);
+      }
+    }
+    back.push({bk, heat}); f = g;
+  }
+  let best = -1, bv = INF;
+  for(let st=0; st<NS; st++) if(f[st] < bv){ bv = f[st]; best = st; }
+  if(best < 0) return [[ns,ne]];
+  const on = Array(SLOTS).fill(false);
+  for(let i=ne-1;i>=0;i--){ on[i] = !!back[i].heat[best]; best = back[i].bk[best]; }
+  return toRuns(on);
+}
+
+function toRuns(on){
+  const runs = [];
+  on.forEach((x,j)=>{ if(!x) return; const l = runs[runs.length-1]; if(l && l[1]===j) l[1]=j+1; else runs.push([j,j+1]); });
+  return runs;
+}
+
+/* Halvimmat n jaksoa väliltä [from,to), enintään K yhtenäistä pätkää. */
+function cheapestRuns(p, from, to, n, K){
+  const INF = 1e12, key = (c,r,s0)=>(c*(K+1)+r)*2+s0;
+  let f = new Float64Array((n+1)*(K+1)*2).fill(INF); f[key(0,0,0)] = 0;
+  const back = [];
+  for(let i=from;i<to;i++){
+    const g = new Float64Array(f.length).fill(INF), bk = new Int32Array(f.length).fill(-1);
+    for(let c=0;c<=n;c++) for(let r=0;r<=K;r++) for(let s0=0;s0<2;s0++){
+      const v = f[key(c,r,s0)]; if(v>=INF) continue;
+      if(v < g[key(c,r,0)]){ g[key(c,r,0)] = v; bk[key(c,r,0)] = key(c,r,s0); }
+      const r2 = s0 ? r : r+1;
+      if(c<n && r2<=K && v+p[i] < g[key(c+1,r2,1)]){ g[key(c+1,r2,1)] = v+p[i]; bk[key(c+1,r2,1)] = key(c,r,s0); }
+    }
+    back.push(bk); f = g;
+  }
+  let best = -1, bv = INF;
+  for(let r=0;r<=K;r++) for(let s0=0;s0<2;s0++) if(f[key(n,r,s0)] < bv){ bv = f[key(n,r,s0)]; best = key(n,r,s0); }
+  const on = Array(SLOTS).fill(false);
+  for(let i=to-1;i>=from;i--){ on[i] = best % 2 === 1; best = back[i-from][best]; }
+  return toRuns(on);
+}
+
+function ruleText(r){
+  const c = fmt(S.cheap,0), x = fmt(S.dear,0), need = `klo ${tm(Math.round(S.needStart*6))}–${tm(Math.round(S.needEnd*6))}`;
+  return {A:`Sähkö alle ${c} c koko tarveajan ${need}, joten lämmitetään suoraan ilman varausta.`,
+    B:`Sähkö on osan päivää alle ${c} c, joten lämmitetään varaavasti halvimmilla tunneilla.`,
+    C:`Sähkö on yli ${c} c mutta osin alle ${x} c, joten lämmitetään varaavasti asteen pienemmällä korotuksella.`,
+    D:`Sähkö on koko päivän yli ${x} c, joten lämmitetään vain halvimmat neljä tuntia klo 02–22.`}[r.rule];
+}
+
+function renderHeat(d, r){
+  if(!r){ $("heat").innerHTML = `<p class="muted">Koko vuorokauden hintoja ei vielä ole.</p>`; return; }
+  if(r.off){ $("heat").innerHTML = `<p class="big">Ei lämmitystarvetta</p><p class="muted">Ulkona keskimäärin ${fmt(r.temp,0)} °C, joten lämmityskausi ei ole käynnissä. Raja on asetuksissa.</p>`; return; }
+  const usedFallback = temps[iso(d.start)] == null;
+  $("heat").innerHTML = `<p class="muted">Aseta termostaattiin lämmitysajat:</p>
+    <ul class="periods">${r.blocks.map(([a,b,o])=>`<li>klo ${tm(a)}–${tm(b)} &nbsp;+${o} °C</li>`).join("")}</ul>
+    <p class="muted">${ruleText(r)} Ulkona keskimäärin ${fmt(r.temp,0)} °C${usedFallback?" (oletuslämpötila)":""}. ${Math.floor(r.mins/60)} h ${r.mins%60 ? (r.mins%60)+" min " : ""}lämmitystä, keskihinta ${fmt(r.avgPrice)} c/kWh.</p>` + btBlock(d);
+  const b = $("btsend"); if(b) b.onclick = () => sendToThermostat(d, r);
+}
+
+/* Sähköauto: halvimmat tunnit ikkunassa [päivä klo evStart, seuraava päivä klo evEnd) */
+function evPlan(dayStart){
+  const s = new Date(dayStart); s.setHours(S.evStart,0,0,0);
+  const e = new Date(dayStart); if(S.evEnd <= S.evStart) e.setDate(e.getDate()+1); e.setHours(S.evEnd,0,0,0);
+  const seq = [];
+  for(let t=s.getTime(); t<e.getTime(); t+=HOUR){ const v = hourAt(t); if(!v) return null; seq.push({t, p:v.p+S.margin}); }
+  const n = Math.ceil(S.evKwh / S.evKw);
+  if(n<1 || n>seq.length) return {tooLong:true, n, len:seq.length};
+  const energy = i => Math.min(S.evKw, S.evKwh - i*S.evKw);
+  let pick;
+  if(S.evConsecutive){
+    let best=0, bestC=Infinity;
+    for(let i=0;i+n<=seq.length;i++){ const c = seq.slice(i,i+n).reduce((a,x,j)=>a+x.p*energy(j),0); if(c<bestC){bestC=c;best=i;} }
+    pick = seq.slice(best,best+n);
+  }else{
+    pick = [...seq].sort((a,b)=>a.p-b.p).slice(0,n).sort((a,b)=>a.t-b.t);
+  }
+  const sorted = S.evConsecutive ? pick : [...pick].sort((a,b)=>a.p-b.p);
+  const eur = sorted.reduce((a,x,j)=>a+x.p*energy(j),0)/100;
+  const hours = new Set(pick.filter(x=>new Date(x.t).toDateString()===dayStart.toDateString()).map(x=>new Date(x.t).getHours()));
+  return {pick, eur, n, hours};
+}
+
+function ranges(pick){
+  const out = [];
+  for(const x of pick){ const l = out[out.length-1]; if(l && l.end===x.t) l.end = x.t+HOUR; else out.push({start:x.t, end:x.t+HOUR}); }
+  return out.map(r=>`klo ${hh(new Date(r.start).getHours())}–${hh(new Date(r.end).getHours())}`);
+}
+
+function renderEv(r){
+  let html;
+  if(!r) html = `<p class="muted">Latausikkunan hintoja ei vielä ole.</p>`;
+  else if(r.tooLong) html = `<p class="err">Lataus vaatii ${r.n} h, mutta ikkuna on ${r.len} h. Tarkista asetukset.</p>`;
+  else if(S.evConsecutive){
+    const a = new Date(r.pick[0].t), b = new Date(r.pick[r.pick.length-1].t + HOUR);
+    html = `<p class="big">Aloita klo ${hh(a.getHours())}, valmis klo ${hh(b.getHours())}</p>
+      <p class="muted">${a.getDate()!==b.getDate() ? "Alkaa "+dayName(a)+" " : ""}${fmt(S.evKwh,0)} kWh, arviolta ${fmt(r.eur,2)} €.</p>`;
+  }else{
+    html = `<ul class="periods">${ranges(r.pick).map(x=>`<li>${x}</li>`).join("")}</ul>
+      <p class="muted">${fmt(S.evKwh,0)} kWh, arviolta ${fmt(r.eur,2)} €.</p>`;
+  }
+  // viikon halvin latausyö
+  const opts = days.map(d=>({d, r:evPlan(d.start)})).filter(o=>o.r && !o.r.tooLong);
+  if(opts.length > 1){
+    const best = opts.reduce((a,b)=> b.r.eur < a.r.eur ? b : a);
+    html += `<p>Viikon halvin latausilta: <b>${dayName(best.d.start)}</b>, arviolta ${fmt(best.r.eur,2)} €.</p>`;
+  }
+  $("ev").innerHTML = html;
+}
+
+function drawChart(d, heat, ev){
+  const W=360, Hc=150, top=8, base=110, bw=W/24;
+  const ps = d.hours.map(h=>h ? h.p+S.margin : 0);
+  const max = Math.max(5, ...ps), min = Math.min(0, ...ps);
+  const y = v => top + (base-top) * (1 - (v-min)/(max-min));
+  const nowH = new Date().getHours(), isToday = d.i===0;
+  let s = `<svg viewBox="0 0 ${W} ${Hc}" role="img" aria-label="Tuntihinnat">`;
+  s += `<line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)" stroke-width="1"/>`;
+  d.hours.forEach((h,i)=>{
+    if(!h) return;
+    const v = h.p+S.margin, y0 = y(Math.max(0,v)), y1 = y(Math.min(0,v));
+    s += `<rect x="${i*bw+1}" y="${y0}" width="${bw-2}" height="${Math.max(1,y1-y0)}" fill="${color(h.p)}" ${h.confirmed?"":'opacity=".8"'}><title>klo ${hh(i)}: ${fmt(v)} c/kWh</title></rect>`;
+    if(ev.has(i)) s += `<rect x="${i*bw}" y="${base+22}" width="${bw}" height="4" fill="var(--ev)"/>`;
+  });
+  heat.forEach(j => s += `<rect x="${j*bw/6}" y="${base+10}" width="${bw/6+0.2}" height="4" fill="var(--heat)"/>`);
+  if(isToday) s += `<line x1="${nowH*bw}" x2="${nowH*bw}" y1="${top}" y2="${base}" stroke="var(--ink)" stroke-width="1" stroke-dasharray="2 3"/>`;
+  s += `<text x="${W}" y="${top+8}" text-anchor="end" font-size="10" fill="var(--muted)">${fmt(max,0)} c</text>`;
+  [0,6,12,18].forEach(h=> s += `<text x="${h*bw}" y="${Hc-2}" font-size="10" fill="var(--muted)">${h}</text>`);
+  s += `</svg><div class="legend"><span style="display:inline-block;width:18px;height:4px;background:var(--heat)"></span><span>lattialämmitys</span><span style="display:inline-block;width:18px;height:4px;background:var(--ev);margin-left:10px"></span><span>auton lataus</span></div>`;
+  $("chart").innerHTML = s;
+}
+
+/* ---------- Ensto-termostaatti Web Bluetoothilla ----------
+   Rajapinta: Ensto BT IoT interface specification (UUIDit ja tavujärjestys kuten
+   hass_ensto_ble-integraatiossa). Kalenterissa on viikonpäiville 1 (ma) … 7 (su)
+   enintään 6 jaksoa, ja jaksolle annetaan korotus perusasetukseen. */
+const BT = {
+  svc:"f49cefd5-209b-4531-99bd-89fe2909931a",
+  reset:"f366dddb-ebe2-43ee-83c0-472ded74c8fa",
+  ctrl:"8219bc38-a505-4452-8b6c-165e75cff5db",
+  day:"20db94b9-bd18-4f84-bf16-de1163adfd8c",
+  mode:"636d45fd-d7be-491f-966c-380f8631b2c6"
+};
+const wdFull = ["sunnuntai","maanantai","tiistai","keskiviikko","torstai","perjantai","lauantai"];
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+let btLog = store.get("ensto-last", null);
+
+function btBlock(d){
+  if(d.i > 6) return "";
+  if(!navigator.bluetooth) return `<p class="muted">Termostaattiin lähetys vaatii Chrome-selaimen Androidilla ja https-osoitteen.</p>`;
+  const paired = Object.keys(store.get("ensto-ids",{})).length > 0;
+  const last = btLog && btLog.iso===iso(d.start) ? `<p class="muted">Lähetetty termostaattiin ${btLog.at}.</p>` : "";
+  return `<p><button type="button" id="btsend">Lähetä termostaattiin</button></p>
+    <p class="muted" id="btstatus">${paired ? `Korvaa termostaatin kalenterista päivän ${wdFull[d.start.getDay()]} jaksot.` :
+      "Ensimmäisellä kerralla laita termostaatti paritustilaan: irrota säätöpyörä ja paina Bluetooth-painiketta sekunnin, kunnes sininen valo vilkkuu."}</p>${last}`;
+}
+const btStatus = (t, err) => { const e = $("btstatus"); if(e){ e.textContent = t; e.className = err ? "err" : "muted"; } };
+
+async function pickDevice(){
+  const id = store.get("ensto-device", null);
+  if(id && navigator.bluetooth.getDevices){
+    try{ const d = (await navigator.bluetooth.getDevices()).find(x=>x.id===id); if(d) return d; }catch(e){}
+  }
+  const opts = S.btAll ? {acceptAllDevices:true, optionalServices:[BT.svc]} :
+    {filters:[{manufacturerData:[{companyIdentifier:0x2806}]},{manufacturerData:[{companyIdentifier:0x0628}]}], optionalServices:[BT.svc]};
+  const d = await navigator.bluetooth.requestDevice(opts);
+  store.set("ensto-device", d.id);
+  return d;
+}
+
+async function readDay(ctrl, dayCh, wdn){
+  await ctrl.writeValueWithResponse(Uint8Array.of(wdn));
+  await sleep(250);
+  const buf = [];
+  for(let n=0; n<10; n++){
+    const v = new Uint8Array((await dayCh.readValue()).buffer);
+    if(!v.length) break;
+    buf.push(...v.slice(1));
+    if(v[0] & 0x40) break;
+  }
+  while(buf.length < 49) buf.push(0);
+  const dv = new DataView(Uint8Array.from(buf).buffer), progs = [];
+  for(let i=0;i<6;i++){
+    const o = 1+i*8;
+    progs.push({sh:buf[o], sm:buf[o+1], eh:buf[o+2], em:buf[o+3],
+      t:dv.getInt16(o+4,true)/100, p:dv.getInt8(o+6), en:buf[o+7]===1});
+  }
+  return progs.filter(p=>p.en);
+}
+
+async function sendToThermostat(d, r){
+  const btn = $("btsend"); btn.disabled = true;
+  let dev;
+  try{
+    btStatus("Valitse termostaatti…");
+    dev = await pickDevice();
+    btStatus("Yhdistetään…");
+    const server = await dev.gatt.connect();
+    const svc = await server.getPrimaryService(BT.svc);
+    const [reset, ctrl, dayCh, mode] = await Promise.all([BT.reset, BT.ctrl, BT.day, BT.mode].map(u=>svc.getCharacteristic(u)));
+
+    // tunnistautuminen: tunnus luetaan paritustilassa kerran ja tallennetaan puhelimeen
+    const ids = store.get("ensto-ids", {});
+    const fresh = new Uint8Array((await reset.readValue()).buffer).slice(0,4);
+    if(fresh.some(b=>b)){ ids[dev.id] = [...fresh]; store.set("ensto-ids", ids); }
+    if(!ids[dev.id]) throw new Error("Termostaatti ei ole paritustilassa. Irrota säätöpyörä, paina Bluetooth-painiketta sekunnin ja yritä uudelleen.");
+    await reset.writeValueWithResponse(Uint8Array.from(ids[dev.id]));
+
+    const wdn = d.start.getDay()===0 ? 7 : d.start.getDay();
+    btStatus("Luetaan nykyinen kalenteri…");
+    const old = await readDay(ctrl, dayCh, wdn);
+    const pOff = old.length ? old[0].p : 0;
+
+    const data = new Uint8Array(49), dv = new DataView(data.buffer);
+    data[0] = wdn;
+    r.blocks.slice(0,6).forEach(([a,b,off],i)=>{
+      const o = 1+i*8;
+      data[o]=Math.floor(a/6); data[o+1]=(a%6)*10;
+      if(b>=SLOTS){ data[o+2]=23; data[o+3]=59; } else { data[o+2]=Math.floor(b/6); data[o+3]=(b%6)*10; }
+      dv.setInt16(o+4, Math.round(off*100), true);
+      dv.setInt8(o+6, pOff);
+      data[o+7]=1;
+    });
+    btStatus("Kirjoitetaan…");
+    await ctrl.writeValueWithResponse(Uint8Array.of(wdn));
+    const half = Math.ceil(data.length/2);
+    const p1 = new Uint8Array(half+1); p1[0]=0x80; p1.set(data.slice(0,half),1);
+    const p2 = new Uint8Array(data.length-half+1); p2[0]=0x40; p2.set(data.slice(half),1);
+    await dayCh.writeValueWithResponse(p1);
+    await dayCh.writeValueWithResponse(p2);
+    await sleep(250);
+    await ctrl.writeValueWithResponse(Uint8Array.of(0));   // tallennus flashiin
+    await mode.writeValueWithResponse(Uint8Array.of(1));   // kalenteriohjaus päälle
+
+    // tarkistus
+    const back = await readDay(ctrl, dayCh, wdn);
+    const ok = back.length===r.blocks.length && back.every((p,i)=>p.sh*6+p.sm/10===r.blocks[i][0] && Math.abs(p.t-r.blocks[i][2])<0.01);
+    const t = new Date();
+    btLog = {iso:iso(d.start), at:`${dayName(t)} klo ${hh(t.getHours())}.${String(t.getMinutes()).padStart(2,"0")}`};
+    store.set("ensto-last", btLog);
+    btStatus(ok ? `Lähetetty termostaattiin: ${wdFull[d.start.getDay()]}, ${back.map(p=>`${hh(p.sh)}.${String(p.sm).padStart(2,"0")}–${hh(p.eh)}.${String(p.em).padStart(2,"0")} +${fmt(p.t,0)} °C`).join(", ")}.`
+      : "Kirjoitus tehtiin, mutta takaisin luettu kalenteri ei täsmää. Tarkista ajat Enston sovelluksesta.", !ok);
+  }catch(e){
+    btStatus(e.name==="NotFoundError" ? "Termostaattia ei valittu. Jos sitä ei näy listassa, valitse asetuksista Näytä kaikki Bluetooth-laitteet."
+      : (e.message || String(e)), true);
+  }finally{
+    try{ dev && dev.gatt.connected && dev.gatt.disconnect(); }catch(e){}
+    btn.disabled = false;
+  }
+}
+
+// asetukset
+const form = $("settings");
+for(const [k,v] of Object.entries(S)){
+  const el = form.elements[k]; if(!el) continue;
+  if(el.type==="checkbox") el.checked = !!v;
+  else if(el.type==="time") el.value = `${String(Math.floor(v)).padStart(2,"0")}:${String(Math.round((v%1)*60)).padStart(2,"0")}`;
+  else el.value = v;
+}
+form.addEventListener("input", e=>{
+  const el = e.target; if(!el.name) return;
+  const val = el.type==="checkbox" ? el.checked
+    : el.type==="time" ? (el.value ? (([h,m])=>h + m/60)(el.value.split(":").map(Number)) : NaN)
+    : parseFloat(el.value);
+  if(el.type!=="checkbox" && isNaN(val)) return;
+  S[el.name] = val; if(el.name==="minRun") S.minRunSet = true; store.set("sahko-settings", S);
+  if(el.name==="lat"||el.name==="lon") return;
+  render();
+});
+form.addEventListener("change", e=>{ if(e.target.name==="lat"||e.target.name==="lon") load(); });
+$("refresh").onclick = load;
+$("btforget").onclick = () => { store.set("ensto-ids", {}); store.set("ensto-device", null); render(); };
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+load();
+</script>
+</body>
+</html>
