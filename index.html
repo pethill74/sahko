@@ -120,8 +120,11 @@ input[type=checkbox]{width:20px;height:20px;accent-color:var(--low)}
       <label>Kerroin pätee enintään, h <input type="number" step="0.5" min="0.5" name="maxCharge"></label>
       <label>Lyhin lämmitysjakso, min <input type="number" step="10" min="10" name="minRun"></label>
       <label>Halvan sähkön raja, c/kWh <input type="number" step="0.5" name="cheap"></label>
+      <label>Ei varausta, kun halpaa yli, h <input type="number" step="0.5" min="0" name="directHours"></label>
+      <label>Varaus koko jaksolle, kun tauko vähintään, h <input type="number" step="0.5" min="1" name="storageGap"></label>
       <label>Kalliin sähkön raja, c/kWh <input type="number" step="0.5" name="dear"></label>
       <label>Lämpötila, jos ennustetta ei saada, °C <input type="number" step="1" name="fallbackTemp"></label>
+      <label>Kova pakkanen, kun keskilämpö alle °C <input type="number" step="1" max="0" name="hardFrost"></label>
       <label>Ei lämmitystä, kun keskilämpö yli °C <input type="number" step="1" name="seasonOff"></label>
     </fieldset>
     <fieldset><legend>Termostaatti</legend>
@@ -148,7 +151,7 @@ input[type=checkbox]{width:20px;height:20px;accent-color:var(--low)}
 
 <script>
 const HOUR = 3600000;
-const DEFAULTS = {margin:0, needStart:5.5, needEnd:22.5, ratio:2.5, maxCharge:3.5, minRun:10, cheap:4, dear:10, fallbackTemp:0,
+const DEFAULTS = {margin:0, needStart:5.5, needEnd:22.5, ratio:2.5, maxCharge:3.5, minRun:10, directHours:3, storageGap:6, hardFrost:-5, cheap:4, dear:10, fallbackTemp:0,
   evKw:11, evKwh:30, evStart:18, evEnd:7, evConsecutive:true, lat:60.27, lon:25.10,
   seasonOff:12, btAll:false};
 const URL_PRED = "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi/main/deploy/prediction.json";
@@ -302,7 +305,7 @@ function render(){
    päättymisen jälkeen: 3 h → 7,5 h yhteensä, 3,5 h tai pidempi → varaus enintään 5 h 15 min.
    Säännöt (hinnat ilman marginaalia):
    A  hinta alle cheap koko tarveajan          → yksi jakso koko tarveajalle, +5 °C
-   B  hinta alle cheap ainakin osan päivää      → varauslämmitys: +6 (yli 0 °C), +7 (0…−10 °C), +8 (alle −10 °C)
+   B  hinta alle cheap ainakin osan päivää      → varauslämmitys: +6 (yli 0 °C), +7 (0…kova pakkanen), +8 (kovalla pakkasella, oletus alle −5 °C)
    C  hinta yli cheap, mutta osin alle dear      → varauslämmitys kuten B, yksi aste vähemmän
    D  hinta koko päivän yli dear                → halvimmat neljä tuntia klo 02–22, +5 °C
    Varauslämmityksessä valitaan halvimmat jaksot (enintään 6), joiden varaus kattaa tarveajan aukottomasti. */
@@ -323,18 +326,95 @@ function heating(d){
   let rule, off, blocks;
   if(p.slice(ns,ne).every(v=>v < S.cheap)){
     rule = "A"; off = 5; blocks = [[ns,ne]];
+  }else if(p.slice(ns,ne).filter(v=>v < S.cheap).length > S.directHours*6){
+    const band = temp > 0 ? 0 : temp >= S.hardFrost ? 1 : 2;   // yli 0 °C / 0…kova pakkanen / kovalla pakkasella, oletus alle −5 °C
+    rule = "A2"; off = 5 + band; blocks = directPlan(p, ns, ne, 6, 5 + band, 6 + band);
   }else if(p.every(v=>v >= S.dear)){
     rule = "D"; off = 5; blocks = cheapestRuns(p, 12, 132, 24, 6);
   }else{
     const anyCheap = p.some(v=>v < S.cheap);
     rule = anyCheap ? "B" : "C";
-    off = (temp > 0 ? 6 : temp >= -10 ? 7 : 8) - (anyCheap ? 0 : 1);
+    off = (temp > 0 ? 6 : temp >= S.hardFrost ? 7 : 8) - (anyCheap ? 0 : 1);
     blocks = storagePlan(p, ns, ne, 6);
   }
-  blocks = blocks.map(([a,b])=>[a,b,off]);
+  blocks = blocks.map(([a,b,o])=>[a,b,o ?? off]);
   const slots = new Set(); let sum = 0;
   for(const [a,b] of blocks) for(let j=a;j<b;j++){ slots.add(j); sum += p[j]; }
   return {rule, lift:off, temp, blocks, slots, mins:slots.size*10, avgPrice: sum/slots.size + S.margin};
+}
+
+/* A2: halpaa (alle cheap) tarveajalla yli directHours tuntia → ei varauslämmitystä.
+   Lämmitetään +5 aina, kun hinta on alle cheap. Jos perässä on yli tunnin lämmittämätön
+   väli, väliä edeltävä tunti nostetaan +6:een. Pakkasella kumpaakin +1 (0…kova pakkanen) tai +2 (kovalla pakkasella, oletus alle −5 °C) (koko jakso, jos se on alle tunnin).
+   Jos tarveaika alkaa yli tunnin kalliilla jaksolla, lämmitetään tuntia ennen +6.
+   Jos perässä on vähintään storageGap tuntia lämmittämätöntä, koko jakso lämmitetään varauslämmöllä (+6/+7/+8).
+   Lyhyet hintapiikit (myös tunnin sisäiset vartit) ohitetaan Enston 6 jakson rajoissa. */
+function directPlan(p, ns, ne, K, lo, hi){
+  const H = 6;   // tunti 10 min jaksoina
+  const build = (runs, mergeUpTo) => {
+    const out = [];
+    if(runs.length && runs[0][0] - ns > H && ns >= H) out.push([ns-H, ns, hi]);
+    // lämmitysjakso = peräkkäiset pätkät, joiden väliset tauot ovat enintään tunnin (piikkien ohitukset)
+    const groupGap = runs.map(()=>0);
+    for(let i=runs.length-1;i>=0;i--){
+      const next = i+1 < runs.length ? runs[i+1][0] : ne;
+      const gap = next - runs[i][1];
+      groupGap[i] = (gap <= H && i+1 < runs.length) ? groupGap[i+1] : (runs[i][1] < ne ? gap : 0);
+    }
+    runs.forEach(([a,b],i)=>{
+      const next = i+1 < runs.length ? runs[i+1][0] : ne;
+      const gap = next - b;
+      if(groupGap[i] >= S.storageGap*6){
+        out.push([a,b,hi]);            // pitkä tauko edessä: koko lämmitysjakso varauslämpönä
+      }else if(gap > H && b < ne){
+        const len = b - a;
+        if(len <= H || len - H <= mergeUpTo) out.push([a,b,hi]);
+        else { out.push([a,b-H,lo]); out.push([b-H,b,hi]); }
+      }else out.push([a,b,lo]);
+    });
+    // yhdistä peräkkäiset samanarvoiset
+    const m = [];
+    for(const x of out){ const l = m[m.length-1]; if(l && l[1]===x[0] && l[2]===x[2]) l[1]=x[1]; else m.push([...x]); }
+    return m;
+  };
+  // Halvan 10 min jakson lämmittäminen on arvokasta (hyöty = kalliin raja − hinta), kalliin
+  // jakson lämmittäminen maksaa hintansa. Valitaan enintään R yhtenäistä lämmitysjaksoa,
+  // joiden yhteishyöty on suurin. Näin lyhyet hintapiikit (myös tunnin sisäiset vartit)
+  // ohitetaan, kun jaksoja riittää. Kun Enston 6 jakson raja tulee vastaan, lyhyen piikin
+  // yli lämmitetään ja pitkät kalliit ajat jätetään lämmittämättä. R pienenee, kunnes
+  // jaksot +6-tunteineen mahtuvat kuuteen.
+  const w = p.map((v,j)=> j<ns || j>=ne ? -1e9 : v < S.cheap ? S.dear - v : -v);
+  let plan = [];
+  for(let R=K; R>=1; R--){
+    const runs = bestSegments(w, R);
+    plan = build(runs, 0);
+    for(let merge=1; plan.length > K && merge <= H; merge++) plan = build(runs, merge);
+    if(plan.length <= K) break;
+  }
+  return plan;
+}
+
+/* Enintään R yhtenäistä pätkää, joiden painojen summa on suurin (dynaaminen ohjelmointi). */
+function bestSegments(w, R){
+  const N = w.length, NEG = -1e15;
+  const key = (r,s0)=>r*2+s0;
+  let f = new Float64Array((R+1)*2).fill(NEG); f[key(0,0)] = 0;
+  const back = [];
+  for(let i=0;i<N;i++){
+    const g = new Float64Array(f.length).fill(NEG), bk = new Int32Array(f.length).fill(-1);
+    for(let r=0;r<=R;r++) for(let s0=0;s0<2;s0++){
+      const v = f[key(r,s0)]; if(v<=NEG) continue;
+      if(v > g[key(r,0)]){ g[key(r,0)] = v; bk[key(r,0)] = key(r,s0); }
+      const r2 = s0 ? r : r+1;
+      if(r2<=R && v + w[i] > g[key(r2,1)]){ g[key(r2,1)] = v + w[i]; bk[key(r2,1)] = key(r,s0); }
+    }
+    back.push(bk); f = g;
+  }
+  let best = 0;
+  for(let st=0; st<f.length; st++) if(f[st] > f[best]) best = st;
+  const on = Array(N).fill(false);
+  for(let i=N-1;i>=0;i--){ on[i] = best % 2 === 1; best = back[i][best]; }
+  return toRuns(on);
 }
 
 /* Varauslämmitys: käydään 10 min jaksot läpi. Tila on (käytetyt jaksot k, joko
@@ -408,6 +488,7 @@ function cheapestRuns(p, from, to, n, K){
 function ruleText(r){
   const c = fmt(S.cheap,0), x = fmt(S.dear,0), need = `klo ${tm(Math.round(S.needStart*6))}–${tm(Math.round(S.needEnd*6))}`;
   return {A:`Sähkö alle ${c} c koko tarveajan ${need}, joten lämmitetään suoraan ilman varausta.`,
+    A2:`Sähköä alle ${c} c yli ${fmt(S.directHours,0)} h tarveajalla, joten lämmitetään halpoina aikoina +${r.lift} ja yli tunnin taukoja edeltävä tunti +${r.lift+1}. Ennen vähintään ${fmt(S.storageGap,0)} tunnin taukoa koko jakso on +${r.lift+1}. Kalliina aikoina ei lämmitetä.`,
     B:`Sähkö on osan päivää alle ${c} c, joten lämmitetään varaavasti halvimmilla tunneilla.`,
     C:`Sähkö on yli ${c} c mutta osin alle ${x} c, joten lämmitetään varaavasti asteen pienemmällä korotuksella.`,
     D:`Sähkö on koko päivän yli ${x} c, joten lämmitetään vain halvimmat neljä tuntia klo 02–22.`}[r.rule];
