@@ -143,7 +143,7 @@ input[type=checkbox]{width:20px;height:20px;accent-color:var(--low)}
       <label>Leveysaste <input type="number" step="0.01" name="lat"></label>
       <label>Pituusaste <input type="number" step="0.01" name="lon"></label>
     </fieldset>
-    <p class="muted">Hintaennuste: Nordpool Predict FI (sahkovatkain.web.app). Toteutuneet hinnat: porssisahko.net. Sää: Open-Meteo.</p>
+    <p class="muted">Hintaennuste: Nordpool Predict FI (sahkovatkain.web.app). Toteutuneet hinnat: Sähkötin (sahkotin.fi), varalla porssisahko.net. Sää: Open-Meteo.</p>
   </form>
 </details>
 </section>
@@ -156,6 +156,7 @@ const DEFAULTS = {margin:0, needStart:5.5, needEnd:22.5, ratio:2.5, maxCharge:3.
   seasonOff:12, btAll:false};
 const URL_PRED = "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi/main/deploy/prediction.json";
 const URL_REAL = "https://api.porssisahko.net/v2/latest-prices.json";
+const URL_SAHKOTIN = "https://sahkotin.fi/prices.csv";
 
 const store = {
   get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
@@ -193,7 +194,26 @@ async function load(){
     const pred = await getJSON(URL_PRED);
     for(const [t,p] of pred){ const h = floorHour(t); for(let k=0;k<4;k++) map.set(h+k*Q, {p, confirmed:false}); }
   }catch(e){ note.push("hintaennustetta ei saatu"); }
+  // Vahvistetut pörssihinnat (varttitunneittain, sis. alv): ensin Sähkötin, varalla porssisahko.net
+  let realOk = false;
   try{
+    const d0 = new Date(); d0.setHours(0,0,0,0);
+    const d3 = new Date(d0); d3.setDate(d0.getDate()+3);
+    const url = `${URL_SAHKOTIN}?fix=true&vat=true&start=${encodeURIComponent(d0.toISOString())}&end=${encodeURIComponent(d3.toISOString())}`;
+    const r = await fetch(url, {cache:"no-store"});
+    if(!r.ok) throw new Error(r.status);
+    const rows = (await r.text()).split("\n").slice(1).map(l=>{
+      const [ts, pr] = l.split(","); const t = new Date(ts).getTime(), p = parseFloat(pr);
+      return Number.isFinite(t) && Number.isFinite(p) ? [t,p] : null;
+    }).filter(Boolean).sort((x,y)=>x[0]-y[0]);
+    rows.forEach(([t,p],i)=>{
+      const next = i+1 < rows.length ? rows[i+1][0] : t+Q;
+      const end = next - t <= HOUR ? next : t+Q;
+      for(let u=floorQ(t); u<end; u+=Q) map.set(u, {p, confirmed:true});
+    });
+    realOk = rows.length > 0;
+  }catch(e){}
+  if(!realOk) try{
     const real = await getJSON(URL_REAL);
     // pörssihinta on varttitunneittain; tuntihinnat jaetaan neljään varttiin
     for(const x of real.prices || []){
@@ -201,7 +221,9 @@ async function load(){
       const b = x.endDate ? new Date(x.endDate).getTime() : a+Q;
       for(let t=a; t<b; t+=Q) map.set(t, {p:x.price, confirmed:true});
     }
-  }catch(e){ note.push("vahvistettuja hintoja ei saatu"); }
+    realOk = (real.prices || []).length > 0;
+  }catch(e){}
+  if(!realOk) note.push("vahvistettuja hintoja ei saatu");
   try{
     const w = await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${S.lat}&longitude=${S.lon}&daily=temperature_2m_mean&timezone=Europe%2FHelsinki&forecast_days=9`);
     temps = {};
@@ -556,16 +578,21 @@ function renderEv(r){
 
 function drawChart(d, heat, ev){
   const W=360, Hc=150, top=8, base=110, bw=W/24;
-  const ps = d.hours.map(h=>h ? h.p+S.margin : 0);
+  const ps = d.q.map(v=>v==null ? 0 : v+S.margin);
   const max = Math.max(5, ...ps), min = Math.min(0, ...ps);
   const y = v => top + (base-top) * (1 - (v-min)/(max-min));
   const nowH = new Date().getHours(), isToday = d.i===0;
-  let s = `<svg viewBox="0 0 ${W} ${Hc}" role="img" aria-label="Tuntihinnat">`;
+  let s = `<svg viewBox="0 0 ${W} ${Hc}" role="img" aria-label="Varttihinnat">`;
   s += `<line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)" stroke-width="1"/>`;
+  // varttipalkit: vahvistetuissa hinnoissa näkyy tunnin sisäinen vaihtelu
+  d.q.forEach((pq,k)=>{
+    if(pq==null) return;
+    const v = pq+S.margin, y0 = y(Math.max(0,v)), y1 = y(Math.min(0,v));
+    const conf = d.hours[Math.floor(k/4)] && d.hours[Math.floor(k/4)].confirmed;
+    s += `<rect x="${k*bw/4+0.4}" y="${y0}" width="${bw/4-0.8}" height="${Math.max(1,y1-y0)}" fill="${color(pq)}" ${conf?"":'opacity=".8"'}><title>klo ${hh(Math.floor(k/4))}.${String((k%4)*15).padStart(2,"0")}: ${fmt(v)} c/kWh</title></rect>`;
+  });
   d.hours.forEach((h,i)=>{
     if(!h) return;
-    const v = h.p+S.margin, y0 = y(Math.max(0,v)), y1 = y(Math.min(0,v));
-    s += `<rect x="${i*bw+1}" y="${y0}" width="${bw-2}" height="${Math.max(1,y1-y0)}" fill="${color(h.p)}" ${h.confirmed?"":'opacity=".8"'}><title>klo ${hh(i)}: ${fmt(v)} c/kWh</title></rect>`;
     if(ev.has(i)) s += `<rect x="${i*bw}" y="${base+22}" width="${bw}" height="4" fill="var(--ev)"/>`;
   });
   heat.forEach(j => s += `<rect x="${j*bw/6}" y="${base+10}" width="${bw/6+0.2}" height="4" fill="var(--heat)"/>`);
