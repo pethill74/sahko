@@ -742,9 +742,16 @@ async function sendToThermostat(d, r){
     // tunnistautuminen: tunnus luetaan paritustilassa kerran ja tallennetaan puhelimeen
     const ids = store.get("ensto-ids", {});
     const fresh = new Uint8Array((await reset.readValue()).buffer).slice(0,4);
-    if(fresh.some(b=>b)){ ids[dev.id] = [...fresh]; store.set("ensto-ids", ids); }
-    if(!ids[dev.id]) throw new Error("Termostaatti ei ole paritustilassa. Irrota säätöpyörä, paina Bluetooth-painiketta sekunnin ja yritä uudelleen.");
-    await reset.writeValueWithResponse(Uint8Array.from(ids[dev.id]));
+    // Chrome Androidilla laitteen tunniste (dev.id) voi vaihtua joka kerta, joten tunnus
+    // tallennetaan myös laitteen nimellä ja viimeisimpänä tunnuksena.
+    const nameKey = "name:" + (dev.name || "");
+    if(fresh.some(b=>b)){
+      ids[dev.id] = [...fresh]; if(dev.name) ids[nameKey] = [...fresh]; ids._last = [...fresh];
+      store.set("ensto-ids", ids);
+    }
+    const id = ids[dev.id] || (dev.name && ids[nameKey]) || ids._last || Object.values(ids)[0];
+    if(!id) throw new Error("Termostaatti ei ole paritustilassa. Irrota säätöpyörä, paina Bluetooth-painiketta sekunnin ja yritä uudelleen.");
+    await reset.writeValueWithResponse(Uint8Array.from(id));
 
     const wdn = d.start.getDay()===0 ? 7 : d.start.getDay();
     btStatus("Luetaan nykyinen kalenteri…");
