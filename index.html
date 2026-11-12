@@ -151,7 +151,7 @@ input[type=checkbox]{width:20px;height:20px;accent-color:var(--low)}
       <label>Leveysaste <input type="number" step="0.01" name="lat"></label>
       <label>Pituusaste <input type="number" step="0.01" name="lon"></label>
     </fieldset>
-    <p class="muted">Hintaennuste: Nordpool Predict FI (sahkovatkain.web.app). Toteutuneet hinnat: Sähkötin (sahkotin.fi), varalla porssisahko.net. Sää: Open-Meteo.</p>
+    <p class="muted">Versio 2026-11-11b. Hintaennuste: Nordpool Predict FI (sahkovatkain.web.app). Toteutuneet hinnat: Sähkötin (sahkotin.fi), varalla porssisahko.net. Sää: Open-Meteo.</p>
   </form>
 </details>
 </section>
@@ -740,18 +740,26 @@ async function sendToThermostat(d, r){
     const [reset, ctrl, dayCh, mode] = await Promise.all([BT.reset, BT.ctrl, BT.day, BT.mode].map(u=>svc.getCharacteristic(u)));
 
     // tunnistautuminen: tunnus luetaan paritustilassa kerran ja tallennetaan puhelimeen
-    const ids = store.get("ensto-ids", {});
-    const fresh = new Uint8Array((await reset.readValue()).buffer).slice(0,4);
     // Chrome Androidilla laitteen tunniste (dev.id) voi vaihtua joka kerta, joten tunnus
     // tallennetaan myös laitteen nimellä ja viimeisimpänä tunnuksena.
+    const ids = store.get("ensto-ids", {});
     const nameKey = "name:" + (dev.name || "");
-    if(fresh.some(b=>b)){
-      ids[dev.id] = [...fresh]; if(dev.name) ids[nameKey] = [...fresh]; ids._last = [...fresh];
+    let id = ids[dev.id] || (dev.name && ids[nameKey]) || ids._last || Object.values(ids)[0];
+    if(!id){
+      // tunnus luetaan vain kerran, paritustilassa
+      btStatus("Luetaan tunnistekoodi…");
+      let fresh;
+      try{ fresh = new Uint8Array((await reset.readValue()).buffer).slice(0,4); }
+      catch(e){ throw new Error("Tunnistekoodin luku epäonnistui (" + (e.message||e.name) + "). Laita termostaatti paritustilaan ja yritä uudelleen."); }
+      if(!fresh.some(b=>b)) throw new Error("Termostaatti ei ole paritustilassa. Irrota säätöpyörä, paina Bluetooth-painiketta sekunnin ja yritä uudelleen.");
+      id = [...fresh];
+      ids[dev.id] = id; if(dev.name) ids[nameKey] = id; ids._last = id;
       store.set("ensto-ids", ids);
+      if(!store.get("ensto-ids", null)) throw new Error("Selain ei tallentanut tunnistekoodia. Tarkista, ettei Chrome tyhjennä sivuston tietoja.");
     }
-    const id = ids[dev.id] || (dev.name && ids[nameKey]) || ids._last || Object.values(ids)[0];
-    if(!id) throw new Error("Termostaatti ei ole paritustilassa. Irrota säätöpyörä, paina Bluetooth-painiketta sekunnin ja yritä uudelleen.");
-    await reset.writeValueWithResponse(Uint8Array.from(id));
+    btStatus("Tunnistaudutaan…");
+    try{ await reset.writeValueWithResponse(Uint8Array.from(id)); }
+    catch(e){ throw new Error("Tunnistautuminen epäonnistui (" + (e.message||e.name) + "). Jos tämä toistuu, paina asetuksista Unohda ja tee paritus uudelleen."); }
 
     const wdn = d.start.getDay()===0 ? 7 : d.start.getDay();
     btStatus("Luetaan nykyinen kalenteri…");
